@@ -1,0 +1,204 @@
+---
+title: "Machine Learning-Weight Lifting Exercises Dataset"
+author: "John Shomaker"
+date: "10/2/2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Report Environment & Files
+
+Scripts produced and executed on MAC OS X 10.11.6, and RStudio 0.99.903.
+
+GitHub repo: https://github.com/jshomaker/ML-Fitness.git
+
+### Background & Data
+
+"Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways."
+
+Training data:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+Test data:
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+Citation:
+http://groupware.les.inf.puc-rio.br/har
+
+"The Weight Lifting Exercises Dataset (WLE) includes data for six (6) young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).""
+
+### Objectives
+
+Predict the manner ("classe" variable) in which participants did the exercise. Specific outputs include:
+
++ Demonstrate how model designed and built
++ Demonstrate cross-validation of training set (to reduce error or over-fit)
++ Demonstrate resulting out-of-sample error
++ Predict classe for 20 different test cases
++ Submit as a Github repo with Rmd/HTML (< 2000 wds, < 5 figures) (with gh-pages branch)
+
+
+### 1. Load Relevant Machine Learning Libraries
+
+``` {r load_libraries}
+
+library(caret)
+library(rpart)
+library(randomForest)
+
+set.seed(1226)
+
+```
+
+### 2. Download Training & Testing Datasets
+
+```{r WLE_download}
+
+## Download the training and testing sets for the fitness data
+
+training_file <- "training.csv"
+testing_file <- "testing.csv"
+
+if (!file.exists(training_file)){
+      training_URL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+      download.file(training_URL, training_file, method="curl")
+}  
+
+if (!file.exists(testing_file)){
+      testing_URL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+      download.file(testing_URL, testing_file, method="curl")
+}
+
+training <- read.csv(training_file, na.strings=c("NA","#DIV/0!",""))
+testing <- read.csv(testing_file, na.strings=c("NA","#DIV/0!",""))
+
+```
+
+### 3. Subset Training Into Training & Validation Datasets
+
+```{r cv_sets}
+
+## Subset training into training (train1) (60%) and validation (val1) (40%)
+## Val1 will provide out-of-sample error
+
+inTrain <- createDataPartition(y = training$classe, p = 0.6, list = FALSE)
+train1 <- training[inTrain,]
+val1 <- training[-inTrain,]
+
+train1$classe <- as.factor(train1$classe)
+val1$classe <- as.factor(val1$classe)
+
+```
+
+### 4. Eliminate Predictors With Zeros, No Value Variation, and/or Mostly NAs
+
+``` {r clean_data}
+
+## Cleaning 1 - eliminate predictors with near-zero variance/variation
+
+NZV <- nearZeroVar(train1, saveMetrics=TRUE)
+
+## Note: found this code online to reduce typing
+
+NZVnames <- names(train1) %in% c("new_window", "kurtosis_roll_belt", "kurtosis_picth_belt","kurtosis_yaw_belt", "skewness_roll_belt", "skewness_roll_belt.1", "skewness_yaw_belt","max_yaw_belt", "min_yaw_belt", "amplitude_yaw_belt", "avg_roll_arm", "stddev_roll_arm","var_roll_arm", "avg_pitch_arm", "stddev_pitch_arm", "var_pitch_arm", "avg_yaw_arm","stddev_yaw_arm", "var_yaw_arm", "kurtosis_roll_arm", "kurtosis_picth_arm",
+"kurtosis_yaw_arm", "skewness_roll_arm", "skewness_pitch_arm", "skewness_yaw_arm",
+"max_roll_arm", "min_roll_arm", "min_pitch_arm", "amplitude_roll_arm", "amplitude_pitch_arm",
+"kurtosis_roll_dumbbell", "kurtosis_picth_dumbbell", "kurtosis_yaw_dumbbell", "skewness_roll_dumbbell","skewness_pitch_dumbbell", "skewness_yaw_dumbbell", "max_yaw_dumbbell", "min_yaw_dumbbell","amplitude_yaw_dumbbell", "kurtosis_roll_forearm", "kurtosis_picth_forearm", "kurtosis_yaw_forearm","skewness_roll_forearm", "skewness_pitch_forearm", "skewness_yaw_forearm", "max_roll_forearm",
+"max_yaw_forearm", "min_roll_forearm", "min_yaw_forearm", "amplitude_roll_forearm",
+"amplitude_yaw_forearm", "avg_roll_forearm", "stddev_roll_forearm", "var_roll_forearm",
+"avg_pitch_forearm", "stddev_pitch_forearm", "var_pitch_forearm", "avg_yaw_forearm",
+"stddev_yaw_forearm", "var_yaw_forearm")
+
+train2 <- train1[!NZVnames]
+
+## Clean 2 - eliminate row_ID, since not relevant predictor
+
+train2 <- train2[c(-1)]
+
+## Clean 3 - eliminate predictors with > 50% NAs
+
+train3 <- train2
+
+for(i in 1:length(train2)) { #for every column in the training dataset
+
+      if( sum( is.na( train2[, i] ) ) /nrow(train2) >= .5 ) { #if NAs > 60% of total
+        
+             for(j in 1:length(train3)) {
+                    
+                    if( length( grep(names(train2[i]), names(train3)[j]) ) ==1)  { #if same
+                
+                           train3 <- train3[ , -j] # delete column
+            }   
+        } 
+    }
+}
+
+## Clean 4 - apply final columns to val1 (validation dataset)
+
+clean_col <- colnames(train3)
+val3 <- val1[clean_col]
+
+## Clean 5 - apply final columns without 'classe' to testing (official test dataset)
+
+clean_col_wo_classe <- colnames(train3[, -58])
+testing <- testing[clean_col_wo_classe]
+
+dim(train3); dim(val3); dim(testing)
+
+```
+
+## 5. Compare Prediction & Error for Decision Tree vs. Random Forest
+
+Selected Random Forest, since focused on prediction accuracy (albeit more difficult to interpret individual coefficients).
+
+``` {r two_models}
+
+## Random Forest running way too long with 10,000+ rows and 58 variables
+## Found libraries to run CPU cores in parallel
+
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv", number = 10, allowParallel = TRUE)
+
+## Two models, referenced as Decision Tree (DT) and Random Forest (RF)
+## Train the models and then apply to val1 (test) for prediction error
+
+modDT <- train(classe ~ ., method = "rpart", data = train3)
+modRF <- train(classe ~ ., method="rf", data =  train3, trControl = fitControl)
+
+## Release CPU core cluster
+stopCluster(cluster)
+
+predDT <- predict(modDT, val1)
+predRF <- predict(modRF, val1)
+
+confusionMatrix(predDT, val1$classe)
+confusionMatrix(predRF, val1$classe)
+
+```
+Random Forest is much more accurate (0.9992) vs. Decision Tree (0.6173).
+
+
+### 6. Produce File of Predictions on Testing Data (n=20)
+
+```{r test_predictions, echo=FALSE}
+
+predRF_testing <- predict(modRF, testing)
+
+answer_file = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("question_#",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+answer_file(predRF_testing)
+
+```
+
